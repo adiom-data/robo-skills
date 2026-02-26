@@ -1,0 +1,69 @@
+# DB2 SQLBatch Dsync Mapping Template
+# DB2 does not support JSON_ARRAYAGG - use LISTAGG with manual JSON construction
+
+driver: db2
+connectionstring: db2://{{USER}}:{{PASSWORD}}@{{HOST}}:50000?database={{DATABASE}}
+
+mappings:
+  # ============================================================================
+  # Single Table Mapping
+  # ============================================================================
+  - namespace: {{NAMESPACE}}
+    countquery: "SELECT COUNT(1) FROM {{SCHEMA}}.{{TABLE}}"
+    partitionquery: "SELECT CAST({{PK}} AS VARCHAR(50)) AS ID FROM {{SCHEMA}}.{{TABLE}} FETCH FIRST 1000 ROWS ONLY"
+    query: |
+      SELECT 
+          CAST(t.{{PK}} AS VARCHAR(50)) AS ID,
+          t.Column1 AS "field1",
+          t.Column2 AS "field2",
+          t.ModifiedDate AS "modifiedDate"
+      FROM {{SCHEMA}}.{{TABLE}} t
+    limit: 500
+    cols: ["ID"]
+    changes:
+      - query: "SELECT CAST(t.{{PK}} AS VARCHAR(50)) AS ID, CASE WHEN cdc.IBMSNAP_OPERATION = 'D' THEN 'D' ELSE 'U' END AS SYS_CHANGE_OPERATION, cdc.IBMSNAP_COMMITSEQ FROM ASNCDC.CDC_{{SCHEMA}}_{{TABLE}} cdc JOIN {{SCHEMA}}.{{TABLE}} t ON t.{{PK}} = cdc.{{PK}} WHERE cdc.IBMSNAP_COMMITSEQ > ?"
+        initialcursorquery: "SELECT MAX(SYNCHPOINT) FROM (SELECT CD_NEW_SYNCHPOINT AS SYNCHPOINT FROM ASNCDC.IBMSNAP_REGISTER UNION ALL SELECT SYNCHPOINT AS SYNCHPOINT FROM ASNCDC.IBMSNAP_REGISTER)"
+
+  # ============================================================================
+  # Multi-Table with Embedded JSON (Manual JSON Construction)
+  # DB2 requires LISTAGG instead of JSON_ARRAYAGG
+  # ============================================================================
+  - namespace: {{NAMESPACE}}
+    countquery: "SELECT COUNT(1) FROM {{SCHEMA}}.{{PARENT_TABLE}}"
+    partitionquery: "SELECT CAST({{PK}} AS VARCHAR(50)) AS ID FROM {{SCHEMA}}.{{PARENT_TABLE}} FETCH FIRST 1000 ROWS ONLY"
+    query: |
+      SELECT 
+          CAST(p.{{PK}} AS VARCHAR(50)) AS ID,
+          p.Name AS "name",
+          -- Manual JSON array construction using LISTAGG
+          CAST(COALESCE('[' || (
+            SELECT LISTAGG(
+              '{' ||
+              '"childId":"' || CAST(c.ChildID AS VARCHAR(20)) || '",' ||
+              '"name":"' || REPLACE(c.Name, '"', '\"') || '",' ||
+              '"value":' || CAST(c.Value AS VARCHAR(20)) ||
+              '}', ','
+            ) WITHIN GROUP (ORDER BY c.ChildID)
+            FROM {{SCHEMA}}.{{CHILD_TABLE}} c 
+            WHERE c.{{FK}} = p.{{PK}}
+          ) || ']', '[]') AS VARCHAR(32000)) AS "children",
+          p.ModifiedDate AS "modifiedDate"
+      FROM {{SCHEMA}}.{{PARENT_TABLE}} p
+    limit: 500
+    cols: ["ID"]
+    decodejson: ["children"]
+    changes:
+      # Primary table CDC
+      - query: "SELECT CAST(p.{{PK}} AS VARCHAR(50)) AS ID, CASE WHEN cdc.IBMSNAP_OPERATION = 'D' THEN 'D' ELSE 'U' END AS SYS_CHANGE_OPERATION, cdc.IBMSNAP_COMMITSEQ FROM ASNCDC.CDC_{{SCHEMA}}_{{PARENT_TABLE}} cdc JOIN {{SCHEMA}}.{{PARENT_TABLE}} p ON p.{{PK}} = cdc.{{PK}} WHERE cdc.IBMSNAP_COMMITSEQ > ?"
+        initialcursorquery: "SELECT MAX(SYNCHPOINT) FROM (SELECT CD_NEW_SYNCHPOINT AS SYNCHPOINT FROM ASNCDC.IBMSNAP_REGISTER UNION ALL SELECT SYNCHPOINT AS SYNCHPOINT FROM ASNCDC.IBMSNAP_REGISTER)"
+      # Child table CDC - triggers update on parent
+      - query: "SELECT CAST(c.{{FK}} AS VARCHAR(50)) AS ID, 'U' AS SYS_CHANGE_OPERATION, cdc.IBMSNAP_COMMITSEQ FROM ASNCDC.CDC_{{SCHEMA}}_{{CHILD_TABLE}} cdc JOIN {{SCHEMA}}.{{CHILD_TABLE}} c ON c.{{CHILD_PK}} = cdc.{{CHILD_PK}} WHERE cdc.IBMSNAP_COMMITSEQ > ? AND c.{{FK}} IS NOT NULL"
+        initialcursorquery: "SELECT MAX(SYNCHPOINT) FROM (SELECT CD_NEW_SYNCHPOINT AS SYNCHPOINT FROM ASNCDC.IBMSNAP_REGISTER UNION ALL SELECT SYNCHPOINT AS SYNCHPOINT FROM ASNCDC.IBMSNAP_REGISTER)"
+
+# Notes for DB2:
+# 1. CDC tables are in ASNCDC schema: ASNCDC.CDC_<SCHEMA>_<TABLE>
+# 2. Use IBMSNAP_COMMITSEQ for change tracking cursor
+# 3. IBMSNAP_OPERATION values: 'I' (insert), 'U' (update), 'D' (delete)
+# 4. JSON must be manually constructed with LISTAGG and string concatenation
+# 5. Use COALESCE to handle empty arrays: COALESCE('['||...||']', '[]')
+# 6. Escape quotes in string values: REPLACE(col, '"', '\"')

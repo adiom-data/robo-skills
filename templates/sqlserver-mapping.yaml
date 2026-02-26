@@ -1,0 +1,110 @@
+# SQL Server SQLBatch Dsync Mapping Template
+# Replace placeholders: {{DATABASE}}, {{TABLE}}, {{COLUMNS}}, etc.
+
+driver: sqlserver
+connectionstring: sqlserver://{{USER}}:{{PASSWORD}}@host.docker.internal:1433?database={{DATABASE}}
+
+mappings:
+  # ============================================================================
+  # Single Table Mapping (Simple Case)
+  # ============================================================================
+  - namespace: {{CONTAINER}}.{{DOCTYPE}}
+    countquery: "SELECT COUNT(1) FROM {{SCHEMA}}.{{TABLE}}"
+    partitionquery: "SELECT '{{PREFIX}}_' + CAST({{PK}} AS VARCHAR) AS ID FROM {{SCHEMA}}.{{TABLE}} TABLESAMPLE (1 PERCENT)"
+    query: |
+      SELECT 
+          '{{PREFIX}}_' + CAST(t.{{PK}} AS VARCHAR) AS ID,
+          '{{PREFIX}}_' + CAST(t.{{PK}} AS VARCHAR) AS partitionKey,
+          '{{DOCTYPE}}' AS type,
+          t.Column1 AS field1,
+          t.Column2 AS field2,
+          -- For money/decimal types, CAST to FLOAT to avoid base64 encoding
+          CAST(t.MoneyColumn AS FLOAT) AS amount,
+          t.ModifiedDate AS modifiedDate
+      FROM {{SCHEMA}}.{{TABLE}} t
+    limit: 500
+    cols: ["ID"]
+    changes:
+      - query: "SELECT '{{PREFIX}}_' + CAST(t.{{PK}} AS VARCHAR) AS ID, CT.SYS_CHANGE_OPERATION, CHANGE_TRACKING_CURRENT_VERSION() FROM CHANGETABLE(CHANGES {{SCHEMA}}.{{TABLE}}, @p1) AS CT JOIN {{SCHEMA}}.{{TABLE}} t ON t.{{PK}} = CT.{{PK}}"
+        initialcursorquery: "SELECT CHANGE_TRACKING_CURRENT_VERSION()"
+
+  # ============================================================================
+  # Multi-Table with Embedded JSON Array
+  # ============================================================================
+  - namespace: {{CONTAINER}}.{{DOCTYPE}}
+    countquery: "SELECT COUNT(1) FROM {{SCHEMA}}.{{PARENT_TABLE}}"
+    partitionquery: "SELECT '{{PREFIX}}_' + CAST({{PK}} AS VARCHAR) AS ID FROM {{SCHEMA}}.{{PARENT_TABLE}} TABLESAMPLE (1 PERCENT)"
+    query: |
+      SELECT 
+          '{{PREFIX}}_' + CAST(p.{{PK}} AS VARCHAR) AS ID,
+          '{{PREFIX}}_' + CAST(p.{{PK}} AS VARCHAR) AS partitionKey,
+          '{{DOCTYPE}}' AS type,
+          p.Name AS name,
+          -- Embedded array using FOR JSON PATH
+          (SELECT 
+              c.ChildID AS childId,
+              c.Name AS name,
+              c.Value AS value
+           FROM {{SCHEMA}}.{{CHILD_TABLE}} c 
+           WHERE c.{{FK}} = p.{{PK}}
+           FOR JSON PATH) AS children,
+          -- Embedded single object using WITHOUT_ARRAY_WRAPPER
+          (SELECT 
+              r.Field1 AS field1,
+              r.Field2 AS field2
+           FROM {{SCHEMA}}.{{RELATED_TABLE}} r 
+           WHERE r.{{FK}} = p.{{PK}}
+           FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS relatedObject,
+          p.ModifiedDate AS modifiedDate
+      FROM {{SCHEMA}}.{{PARENT_TABLE}} p
+    limit: 500
+    cols: ["ID"]
+    decodejson: ["children", "relatedObject"]
+    changes:
+      # Primary table changes
+      - query: "SELECT '{{PREFIX}}_' + CAST(p.{{PK}} AS VARCHAR) AS ID, CT.SYS_CHANGE_OPERATION, CHANGE_TRACKING_CURRENT_VERSION() FROM CHANGETABLE(CHANGES {{SCHEMA}}.{{PARENT_TABLE}}, @p1) AS CT JOIN {{SCHEMA}}.{{PARENT_TABLE}} p ON p.{{PK}} = CT.{{PK}}"
+        initialcursorquery: "SELECT CHANGE_TRACKING_CURRENT_VERSION()"
+      # Child table changes - IMPORTANT: Join on child's PK, not parent's
+      - query: "SELECT '{{PREFIX}}_' + CAST(c.{{FK}} AS VARCHAR) AS ID, 'U' AS SYS_CHANGE_OPERATION, CHANGE_TRACKING_CURRENT_VERSION() FROM CHANGETABLE(CHANGES {{SCHEMA}}.{{CHILD_TABLE}}, @p1) AS CT JOIN {{SCHEMA}}.{{CHILD_TABLE}} c ON c.{{CHILD_PK}} = CT.{{CHILD_PK}} WHERE c.{{FK}} IS NOT NULL"
+        initialcursorquery: "SELECT CHANGE_TRACKING_CURRENT_VERSION()"
+      # Related table changes
+      - query: "SELECT '{{PREFIX}}_' + CAST(r.{{FK}} AS VARCHAR) AS ID, 'U' AS SYS_CHANGE_OPERATION, CHANGE_TRACKING_CURRENT_VERSION() FROM CHANGETABLE(CHANGES {{SCHEMA}}.{{RELATED_TABLE}}, @p1) AS CT JOIN {{SCHEMA}}.{{RELATED_TABLE}} r ON r.{{RELATED_PK}} = CT.{{RELATED_PK}} WHERE r.{{FK}} IS NOT NULL"
+        initialcursorquery: "SELECT CHANGE_TRACKING_CURRENT_VERSION()"
+
+  # ============================================================================
+  # Aggregated Document (GROUP BY pattern)
+  # Example: Shopping cart aggregating items by cart ID
+  # ============================================================================
+  - namespace: {{CONTAINER}}
+    countquery: "SELECT COUNT(DISTINCT {{GROUP_KEY}}) FROM {{SCHEMA}}.{{TABLE}}"
+    partitionquery: "SELECT DISTINCT '{{PREFIX}}_' + {{GROUP_KEY}} AS ID FROM {{SCHEMA}}.{{TABLE}}"
+    query: |
+      SELECT 
+          '{{PREFIX}}_' + t.{{GROUP_KEY}} AS ID,
+          '{{PREFIX}}_' + t.{{GROUP_KEY}} AS partitionKey,
+          '{{DOCTYPE}}' AS type,
+          t.{{GROUP_KEY}} AS sessionId,
+          (SELECT 
+              i.ItemID AS itemId,
+              i.ProductID AS productId,
+              p.Name AS productName,
+              p.ListPrice AS listPrice,
+              i.Quantity AS quantity
+           FROM {{SCHEMA}}.{{TABLE}} i
+           JOIN {{SCHEMA}}.Product p ON p.ProductID = i.ProductID
+           WHERE i.{{GROUP_KEY}} = t.{{GROUP_KEY}}
+           FOR JSON PATH) AS items,
+          CAST((SELECT SUM(i.Quantity * p.ListPrice) 
+           FROM {{SCHEMA}}.{{TABLE}} i 
+           JOIN {{SCHEMA}}.Product p ON p.ProductID = i.ProductID 
+           WHERE i.{{GROUP_KEY}} = t.{{GROUP_KEY}}) AS FLOAT) AS total,
+          MIN(t.DateCreated) AS createdDate,
+          MAX(t.ModifiedDate) AS modifiedDate
+      FROM {{SCHEMA}}.{{TABLE}} t
+      GROUP BY t.{{GROUP_KEY}}
+    limit: 500
+    cols: ["ID"]
+    decodejson: ["items"]
+    changes:
+      - query: "SELECT '{{PREFIX}}_' + i.{{GROUP_KEY}} AS ID, CASE WHEN CT.SYS_CHANGE_OPERATION = 'D' THEN 'D' ELSE 'U' END AS SYS_CHANGE_OPERATION, CHANGE_TRACKING_CURRENT_VERSION() FROM CHANGETABLE(CHANGES {{SCHEMA}}.{{TABLE}}, @p1) AS CT LEFT JOIN {{SCHEMA}}.{{TABLE}} i ON i.{{ITEM_PK}} = CT.{{ITEM_PK}}"
+        initialcursorquery: "SELECT CHANGE_TRACKING_CURRENT_VERSION()"

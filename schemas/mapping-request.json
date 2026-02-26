@@ -1,0 +1,162 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Dsync SQLBatch Mapping Request",
+  "description": "Input schema for generating dsync SQLBatch YAML configuration",
+  "type": "object",
+  "required": ["database", "documentModel"],
+  "properties": {
+    "database": {
+      "type": "object",
+      "required": ["type", "connectionString"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["sqlserver", "db2", "postgres"],
+          "description": "Database type"
+        },
+        "connectionString": {
+          "type": "string",
+          "description": "Connection string (use host.docker.internal for Docker)"
+        },
+        "schema": {
+          "type": "string",
+          "description": "SQL DDL or path to schema file"
+        }
+      }
+    },
+    "documentModel": {
+      "type": "object",
+      "required": ["containers"],
+      "properties": {
+        "containers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "documentTypes"],
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Container/collection name"
+              },
+              "documentTypes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["type", "sourceTable", "partitionKeyPattern"],
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "description": "Document type name (e.g., 'customer', 'order')"
+                    },
+                    "sourceTable": {
+                      "type": "string",
+                      "description": "Primary source table (Schema.Table format)"
+                    },
+                    "partitionKeyPattern": {
+                      "type": "string",
+                      "description": "Partition key pattern (e.g., 'customer_{CustomerID}')"
+                    },
+                    "idPattern": {
+                      "type": "string",
+                      "description": "Document ID pattern (e.g., 'order_{OrderID}')"
+                    },
+                    "embeddedData": {
+                      "type": "array",
+                      "description": "Related data to embed as nested JSON",
+                      "items": {
+                        "type": "object",
+                        "required": ["fieldName", "sourceTable", "joinCondition"],
+                        "properties": {
+                          "fieldName": {
+                            "type": "string",
+                            "description": "Field name for embedded array/object"
+                          },
+                          "sourceTable": {
+                            "type": "string",
+                            "description": "Source table for embedded data"
+                          },
+                          "joinCondition": {
+                            "type": "string",
+                            "description": "JOIN condition (e.g., 'child.ParentID = parent.ID')"
+                          },
+                          "isArray": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "True for array, false for single object"
+                          }
+                        }
+                      }
+                    },
+                    "denormalizedFields": {
+                      "type": "array",
+                      "description": "Fields to denormalize from related tables",
+                      "items": {
+                        "type": "object",
+                        "required": ["fieldName", "sourceTable", "sourceColumn", "joinCondition"],
+                        "properties": {
+                          "fieldName": {
+                            "type": "string"
+                          },
+                          "sourceTable": {
+                            "type": "string"
+                          },
+                          "sourceColumn": {
+                            "type": "string"
+                          },
+                          "joinCondition": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "aggregations": {
+                      "type": "array",
+                      "description": "Computed aggregations (COUNT, AVG, SUM)",
+                      "items": {
+                        "type": "object",
+                        "required": ["fieldName", "function", "sourceTable"],
+                        "properties": {
+                          "fieldName": {
+                            "type": "string"
+                          },
+                          "function": {
+                            "type": "string",
+                            "enum": ["COUNT", "AVG", "SUM", "MIN", "MAX"]
+                          },
+                          "sourceTable": {
+                            "type": "string"
+                          },
+                          "sourceColumn": {
+                            "type": "string"
+                          },
+                          "condition": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "options": {
+      "type": "object",
+      "properties": {
+        "batchLimit": {
+          "type": "integer",
+          "default": 500,
+          "description": "Records per batch"
+        },
+        "enableCDC": {
+          "type": "boolean",
+          "default": true,
+          "description": "Generate change tracking queries"
+        }
+      }
+    }
+  }
+}
