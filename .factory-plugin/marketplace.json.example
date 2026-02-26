@@ -1,0 +1,28 @@
+{
+  "name": "factory-plugins",
+  "description": "Official Factory plugins marketplace",
+  "owner": {
+    "name": "Factory",
+    "email": "support@factory.ai"
+  },
+  "plugins": [
+    {
+      "name": "security-engineer",
+      "description": "Security review, threat modeling, and vulnerability validation skills",
+      "source": "./plugins/security-engineer",
+      "category": "security"
+    },
+    {
+      "name": "droid-evolved",
+      "description": "Skills for continuous learning and improvement: session navigation, human writing, skill creation, visual design, and browser automation",
+      "source": "./plugins/droid-evolved",
+      "category": "productivity"
+    },
+    {
+      "name": "core",
+      "description": "Core Skills for essential functionalities and integrations",
+      "source": "./plugins/core",
+      "category": "core"
+    }
+  ]
+}

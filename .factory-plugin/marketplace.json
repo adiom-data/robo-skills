@@ -1,0 +1,16 @@
+{
+  "name": "adiom-plugins",
+  "description": "Adiom data tools and skills marketplace",
+  "owner": {
+    "name": "Adiom",
+    "email": "support@adiom.io"
+  },
+  "plugins": [
+    {
+      "name": "dsync-sqlbatch-mapping",
+      "description": "Generate SQLBatch dsync YAML configuration for SQL to NoSQL data sync with CDC support",
+      "source": "./plugins/dsync-sqlbatch-mapping",
+      "category": "data"
+    }
+  ]
+}
