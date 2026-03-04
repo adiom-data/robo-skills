@@ -17,6 +17,12 @@
       "description": "Generate SQLBatch dsync YAML configuration for SQL to NoSQL data sync with CDC support",
       "source": "./plugins/dsync-sqlbatch-mapping",
       "category": "data"
+    },
+    {
+      "name": "self-improve",
+      "description": "Reflect on session learnings and contribute skill improvements via PRs",
+      "source": "./plugins/self-improve",
+      "category": "meta"
     }
   ]
 }

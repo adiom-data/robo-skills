@@ -8,6 +8,7 @@ A collection of AI-powered skills (plugins) for Factory Droid.
 |--------|-------------|
 | [dsync-runner](plugins/dsync-runner) | Run database migrations with dsync (open source) or dsynct (enterprise) |
 | [dsync-sqlbatch-mapping](plugins/dsync-sqlbatch-mapping) | Generate SQLBatch dsync YAML configuration for SQL to NoSQL data sync |
+| [self-improve](plugins/self-improve) | Reflect on session learnings and contribute skill improvements via PRs |
 
 ## Installation
 
