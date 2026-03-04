@@ -7,6 +7,12 @@
   },
   "plugins": [
     {
+      "name": "dsync-runner",
+      "description": "Run database migrations with dsync (open source) or dsynct (enterprise) with CDC support",
+      "source": "./plugins/dsync-runner",
+      "category": "data"
+    },
+    {
       "name": "dsync-sqlbatch-mapping",
       "description": "Generate SQLBatch dsync YAML configuration for SQL to NoSQL data sync with CDC support",
       "source": "./plugins/dsync-sqlbatch-mapping",
