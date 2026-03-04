@@ -1,0 +1,92 @@
+# Docker Compose for Enterprise Dsynct Deployment
+# Includes: Temporal, SigNoz, Workers, Runner
+#
+# Usage:
+#   1. Update SOURCE and DESTINATION in .env or replace below
+#   2. docker compose up -d temporal signoz
+#   3. Access SigNoz at http://localhost:3301 and create account
+#   4. docker compose up -d worker runner
+#   5. Monitor at http://localhost:8080/progress
+
+version: '3.8'
+
+services:
+  # Temporal Development Server
+  temporal:
+    image: temporalio/auto-setup:latest
+    ports:
+      - "7233:7233"   # gRPC
+      - "8233:8233"   # Web UI
+    environment:
+      - DB=sqlite
+      - DYNAMIC_CONFIG_FILE_PATH=/etc/temporal/dynamic_config.yaml
+    volumes:
+      - temporal-data:/var/lib/temporal
+      - ./temporal-config.yaml:/etc/temporal/dynamic_config.yaml:ro
+    healthcheck:
+      test: ["CMD", "temporal", "workflow", "list", "--namespace", "default"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # SigNoz Observability (OpenTelemetry)
+  signoz:
+    image: signoz/signoz:latest
+    ports:
+      - "3301:3301"   # Web UI
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    volumes:
+      - signoz-data:/var/lib/signoz
+    environment:
+      - SIGNOZ_LOCAL_DB_PATH=/var/lib/signoz/signoz.db
+
+  # Dsynct Worker (scale as needed)
+  worker:
+    image: markadiom/dsynct:latest
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://signoz:4317
+    command: >
+      worker
+      --concurrent-activities 4
+      --sync-transform-workers 4
+      --sync-writer-workers 8
+      --per-stream-workers 4
+      --queue-name migration-queue
+      ${SOURCE:-mongodb://host.docker.internal:27017}
+      ${DESTINATION:-mongodb://host.docker.internal:27018}
+      temporal --host-port temporal:7233
+      app --otel
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+
+  # Dsynct Runner (workflow initiator + progress UI)
+  runner:
+    image: markadiom/dsynct:latest
+    depends_on:
+      temporal:
+        condition: service_healthy
+    ports:
+      - "8080:8080"   # Progress UI
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://signoz:4317
+    command: >
+      run
+      --queue-name migration-queue
+      temporal --host-port temporal:7233
+      app --otel --host-port 0.0.0.0:8080
+
+volumes:
+  temporal-data:
+  signoz-data:
+
+# Example .env file:
+# SOURCE=mongodb://user:pass@source-host:27017
+# DESTINATION=mongodb://user:pass@dest-host:27017
