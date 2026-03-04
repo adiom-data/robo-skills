@@ -1,0 +1,142 @@
+# Dsync Transform Configuration Example
+# 
+# Apply transformations during migration using CEL expressions
+# Documentation: https://docs.adiom.io/enterprise/running-dsynct/data-transformations
+#
+# Usage:
+#   docker run -v "./transform.yaml:/transform.yaml" markadiom/dsynct worker \
+#     --transform $SOURCE $DESTINATION dsync-transform://transform.yaml
+#
+# Test with Transform Studio:
+#   docker run -e DSYNCT_MODE=simple -p 8080:8080 markadiom/dsynct \
+#     --host-port 0.0.0.0:8080 studio
+
+# Global Options
+wild: "*"              # Wildcard character for path matching
+delimiter: "."         # Path delimiter
+unwrapbson: false      # Auto-convert BSON types to native
+filtererrors: false    # Skip errors instead of failing
+
+# Environment variables available in CEL expressions
+env:
+  migration_version: "1.0"
+  target_system: "mongodb"
+
+mappings:
+  # Basic field transformation
+  - namespace: source_db.users
+    mapnamespace: dest_db.customers
+    cel:
+      # Combine fields
+      full_name: doc.first_name + " " + doc.last_name
+      # Add timestamp
+      migrated_at: now_millis()
+      # Transform email to lowercase
+      email: self.lower()
+    add:
+      - full_name
+      - migrated_at
+    delete:
+      - first_name
+      - last_name
+      - legacy_status
+
+  # Type conversions
+  - namespace: source_db.products
+    mapnamespace: dest_db.products
+    cel:
+      # Convert price from cents to dollars
+      price_dollars: self / 100.0
+      # Generate UUID
+      product_uuid: uuid_v4_string()
+    map:
+      # Force specific types
+      quantity: int32
+      weight: float
+      product_id: bson_object_id
+    add:
+      - price_dollars
+      - product_uuid
+
+  # ID transformation (change ID format)
+  - namespace: source_db.orders
+    mapnamespace: dest_db.orders
+    # Transform the document ID
+    mapid: '"order_" + string(id[0])'
+    idkeys: ["_id"]
+    finalidkeys: ["order_id"]
+    cel:
+      order_id: '"order_" + string(parent._id)'
+    add:
+      - order_id
+    delete:
+      - _id
+
+  # Filtering documents
+  - namespace: source_db.events
+    mapnamespace: dest_db.events
+    # Only migrate active events from 2024 onwards
+    filter: 'doc.status == "active" && doc.year >= 2024'
+
+  # Data anonymization (PII redaction)
+  - namespace: source_db.customers_pii
+    mapnamespace: dest_db.customers_anonymized
+    cel:
+      # Deterministic fake data (same input = same output)
+      email: fake_email(self)
+      name: fake_name(self)
+      phone: fake_phone(self)
+      address: fake_address(self)
+      city: fake_city(self)
+      # Hash sensitive IDs
+      ssn_hash: sha256(self)
+
+  # Nested document transformation
+  - namespace: source_db.orders_nested
+    mapnamespace: dest_db.orders_flat
+    cel:
+      # Extract nested fields
+      customer_name: doc.customer.name
+      customer_email: doc.customer.email
+      shipping_city: doc.shipping_address.city
+      shipping_country: doc.shipping_address.country
+    add:
+      - customer_name
+      - customer_email
+      - shipping_city
+      - shipping_country
+    delete:
+      - customer
+      - shipping_address
+
+  # JSON encoding/decoding
+  - namespace: source_db.configs
+    mapnamespace: dest_db.configs
+    cel:
+      # Decode JSON string to object
+      settings: json_decode(self)
+      # Encode object to JSON string
+      metadata_json: json_encode(doc.metadata)
+    map:
+      settings: json_decode
+      metadata_json: json_encode
+
+  # Default mapping (catch-all)
+  - namespace: "*"
+    cel:
+      # Add migration metadata to all documents
+      _migration_version: env.migration_version
+      _migrated_at: now_millis()
+    add:
+      - _migration_version
+      - _migrated_at
+
+# Available CEL Functions:
+# - now_millis(), now_nanos(): Current timestamp
+# - uuid_v4_bytes(), uuid_v4_string(): Random UUID
+# - uuid_v3_bytes/string(uuid, name): Deterministic UUID (MD5)
+# - uuid_v5_bytes/string(uuid, name): Deterministic UUID (SHA-1)
+# - fake_name/email/phone/address/city/company/etc.(seed): Fake data
+# - md5/sha1/sha256(data): Hash functions
+# - json_encode/decode: JSON serialization
+# - bson_object_id/uuid: BSON type conversion
