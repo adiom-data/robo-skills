@@ -72,9 +72,9 @@ Why this change improves the skill.
 
 ### Step 4: Create PRs
 
-For each update file created, execute:
+DO NOT create a PR yourself. Use another droid to do that. For each update file created, execute:
 ```bash
-droid exec "Use the file /tmp/skill-updates/<skill-name>-update.md to create a PR in git@github.com:adiom-data/robo-skills.git to create or update skill(s)"
+droid exec --auto high "Use the file /tmp/skill-updates/<skill-name>-update.md to create a PR in git@github.com:adiom-data/robo-skills.git to create or update skill(s)"
 ```
 
 ## Example Session
