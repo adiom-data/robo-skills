@@ -1,0 +1,8 @@
+{
+  "name": "dsync-runner",
+  "description": "Run database migrations with dsync (open source) or dsynct (enterprise) with CDC support",
+  "version": "1.0.0",
+  "author": {
+    "name": "Adiom"
+  }
+}

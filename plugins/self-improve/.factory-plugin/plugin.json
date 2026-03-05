@@ -1,0 +1,8 @@
+{
+  "name": "self-improve",
+  "description": "Reflect on session learnings and contribute skill improvements via PRs",
+  "version": "1.0.0",
+  "author": {
+    "name": "Adiom"
+  }
+}

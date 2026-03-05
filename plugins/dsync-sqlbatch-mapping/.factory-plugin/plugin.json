@@ -1,0 +1,8 @@
+{
+  "name": "dsync-sqlbatch-mapping",
+  "description": "Generate SQLBatch dsync YAML configuration for SQL to NoSQL data sync with CDC support",
+  "version": "1.0.0",
+  "author": {
+    "name": "Adiom"
+  }
+}
