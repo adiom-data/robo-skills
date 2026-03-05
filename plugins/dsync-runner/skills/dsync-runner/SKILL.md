@@ -26,16 +26,34 @@ Help users run database migrations and continuous replication using Adiom's dsyn
 
 ## Supported Connectors
 
-- **MongoDB**: `mongodb://user:pass@host:27017/db`
-- **MongoDB Atlas**: `mongodb+srv://user:pass@cluster.mongodb.net/db` (URL-encode special chars in password)
-- **Cosmos DB MongoDB API**: `mongodb://account:key@account.mongo.cosmos.azure.com:10255/?ssl=true`
-- **Cosmos DB NoSQL**: `cosmosnosql://account.documents.azure.com?accountKey=...&database=db`
-- **DynamoDB**: `dynamodb://region?accessKeyId=...&secretAccessKey=...`
-- **PostgreSQL**: `postgres://user:pass@host:5432/db`
-- **SQLBatch** (SQL Server, DB2, PostgreSQL): `sqlbatch --config=config.yaml`
+> **Note**: Connector availability changes frequently. Always check the official README for the latest:
+> https://github.com/adiom-data/dsync/blob/main/README.md
+
+### NoSQL Databases
+- **MongoDB**: Standard URI format `mongodb://...`
+- **MongoDB Atlas**: SRV format `mongodb+srv://...` (URL-encode special chars)
+- **AWS DocumentDB**: Use MongoDB connector (4.0, 5.0 supported)
+- **Cosmos DB MongoDB API**: Standard MongoDB URI with `?ssl=true`
+- **Cosmos DB NoSQL**: `cosmosnosql://...?accountKey=...&database=...`
+- **DynamoDB**: `dynamodb://...?accessKeyId=...&secretAccessKey=...`
+- **HBase** (1.x, 2.x): Private Preview - includes CDC support
+
+### SQL Databases
+- **PostgreSQL**: Standard URI format `postgres://...`
+- **SQLBatch** (SQL Server, DB2, PostgreSQL, Oracle): `sqlbatch --config=config.yaml`
+
+### Vector Databases
+- **Weaviate**: Sink only (Public Preview)
+- **Qdrant**: Sink only (In Development)
+- **S3 Vector Index**: Sink only (Public Preview)
+
+### File & Storage
+- **CSV Files**: `file://path/to/file.csv` (Source & Sink)
 - **S3**: `s3://bucket?region=...&accessKeyId=...&secretAccessKey=...`
-- **/dev/null**: Discard output (testing)
-- **/dev/fakesource**: Generate test data
+
+### Testing
+- **/dev/null**: Discard output
+- **/dev/random**: Generate random test data
 
 ## Installation
 
