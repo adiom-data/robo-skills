@@ -154,6 +154,97 @@ connectionstring: db2://user:password@host:50000?database=DbName
 | `Change tracking not enabled` | Table not configured | Run enable-change-tracking.sql |
 | `Invalid column name` in CDC | Wrong PK in CHANGETABLE join | Join on table's actual primary key |
 | `connection refused` | Docker can't reach localhost | Use `host.docker.internal` |
+| `no compatible data path` | MongoDB requires BSON, SQLBatch outputs JSON_ID | Use transformer pipeline (see MongoDB section) |
+| Nested objects as JSON strings | Nested FOR JSON subqueries | Use `[parent.child]` bracket notation instead |
+
+## MongoDB Destination Requirements
+
+**CRITICAL**: MongoDB connector only accepts BSON data type, not JSON_ID. When using SQLBatch with MongoDB destination, you MUST use a transformer.
+
+### Transformer Pipeline Setup
+
+1. Create a transformer config file (`dsync-transform.yaml`):
+```yaml
+mappings:
+  - namespace: sourceNamespace
+    mapnamespace: DatabaseName.collectionName
+  - namespace: anotherNamespace
+    mapnamespace: DatabaseName.anotherCollection
+```
+
+2. Use the `--transform` flag and transformer destination:
+```bash
+docker run --rm \
+  -e 'DSYNCT_MODE=simple' \
+  -v ./config.yaml:/cfg.yaml \
+  -v ./dsync-transform.yaml:/transform.yaml \
+  markadiom/dsynct \
+  --log-level INFO \
+  sync --transform --skip-change-stream \
+  --namespace "myNamespace" \
+  sqlbatch --config=/cfg.yaml "mongodb://host:27017" dsync-transform:///transform.yaml
+```
+
+**Pipeline flow**: SQLBatch (JSON_ID) → Transformer → MongoDB (BSON)
+
+## Nested JSON Objects in SQL Server
+
+The `decodejson` array only works for top-level JSON fields. Nested JSON strings inside decoded objects remain as strings.
+
+### Problem
+```sql
+-- This creates a JSON string for parentCategory, not a nested object
+(
+    SELECT
+        pc.ProductCategoryID AS productCategoryId,
+        pc.Name AS name,
+        (
+            SELECT ppc.ProductCategoryID AS productCategoryId, ppc.Name AS name
+            FROM ProductCategory ppc
+            WHERE ppc.ProductCategoryID = pc.ParentProductCategoryID
+            FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+        ) AS parentCategory  -- This becomes a JSON string!
+    FROM ProductCategory pc
+    WHERE pc.ProductCategoryID = p.ProductCategoryID
+    FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+) AS category
+```
+
+### Solution: Use SQL Server Bracket Notation
+```sql
+-- Use [dotted.path] notation to create proper nested objects
+(
+    SELECT
+        pc.ProductCategoryID AS productCategoryId,
+        pc.Name AS name,
+        ppc.ProductCategoryID AS [parentCategory.productCategoryId],
+        ppc.Name AS [parentCategory.name]
+    FROM ProductCategory pc
+    LEFT JOIN ProductCategory ppc ON ppc.ProductCategoryID = pc.ParentProductCategoryID
+    WHERE pc.ProductCategoryID = p.ProductCategoryID
+    FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+) AS category
+```
+
+This produces properly nested objects without needing nested `decodejson`.
+
+### Array Items with Nested Objects
+Same pattern works for arrays:
+```sql
+-- For lineItems with embedded product
+(
+    SELECT
+        sod.OrderQty AS orderQty,
+        sod.UnitPrice AS unitPrice,
+        p.ProductID AS [product.productId],
+        p.Name AS [product.name],
+        p.Color AS [product.color]
+    FROM SalesOrderDetail sod
+    JOIN Product p ON p.ProductID = sod.ProductID
+    WHERE sod.SalesOrderID = soh.SalesOrderID
+    FOR JSON PATH
+) AS lineItems
+```
 
 ## Output
 
