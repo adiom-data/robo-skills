@@ -109,7 +109,7 @@ Atlas SRV format is commonly used and password encoding is a frequent gotcha.
 
 2. Execute:
 ```bash
-droid exec "Use the file /tmp/skill-updates/dsync-runner-update.md to create a PR in git@github.com:adiom-data/robo-skills.git to create or update skill(s)"
+droid exec --auto high "Use the file /tmp/skill-updates/dsync-runner-update.md to create a PR in git@github.com:adiom-data/robo-skills.git to create or update skill(s)"
 ```
 
 ## Guidelines
