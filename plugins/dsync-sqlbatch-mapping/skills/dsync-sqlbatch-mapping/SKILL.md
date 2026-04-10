@@ -86,6 +86,8 @@ mappings:
   JOIN Production.Product pr ON pr.ProductID = CT.ProductID
   ```
 
+### 7. Always specify partition query
+
 ## Database-Specific Patterns
 
 ### SQL Server
