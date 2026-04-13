@@ -262,6 +262,11 @@ docker run -e 'DSYNCT_MODE=temporaltools' markadiom/dsynct unpause --workflow-id
 
 ## Data Transformations
 
+> **Note**: Transformations config and available CEL functions change frequently. Always check offical docs for the latest:
+> https://docs.adiom.io/enterprise/running-dsynct/data-transformations
+> https://docs.adiom.io/enterprise/running-dsynct/data-types
+> https://docs.adiom.io/enterprise/running-dsynct/cel-reference
+
 ### Using YAML Config
 ```bash
 # With embedded transformer
