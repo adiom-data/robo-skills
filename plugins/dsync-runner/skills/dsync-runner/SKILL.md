@@ -34,7 +34,7 @@ Help users run database migrations and continuous replication using Adiom's dsyn
 - **MongoDB Atlas**: SRV format `mongodb+srv://...` (URL-encode special chars)
 - **AWS DocumentDB**: Use MongoDB connector (4.0, 5.0 supported)
 - **Cosmos DB MongoDB API**: Standard MongoDB URI with `?ssl=true`
-- **Cosmos DB NoSQL**: `cosmosnosql://...?accountKey=...&database=...`
+- **Cosmos DB NoSQL**: Not a URI connector — runs as a separate gRPC sidecar (`markadiom/cosmosnosqlconnector`), referenced as `grpc://cosmosnosqlconnector:8089 --insecure`. See [Cosmos DB NoSQL Migrations](#cosmos-db-nosql-migrations).
 - **DynamoDB**: `dynamodb://...?accessKeyId=...&secretAccessKey=...`
 - **HBase** (1.x, 2.x): Private Preview - includes CDC support
 
@@ -260,6 +260,179 @@ docker run -e 'DSYNCT_MODE=temporaltools' markadiom/dsynct pause --workflow-id=<
 docker run -e 'DSYNCT_MODE=temporaltools' markadiom/dsynct unpause --workflow-id=<id>
 ```
 
+## Cosmos DB NoSQL Migrations
+
+Cosmos DB NoSQL is **not** a URI connector. There is no `cosmosnosql://` string. Instead it runs as a separate **gRPC sidecar container** — `markadiom/cosmosnosqlconnector` — and dsync/dsynct connects to it as a connector address: `grpc://cosmosnosqlconnector:8089 --insecure`.
+
+> Docs: [DynamoDB → Cosmos NoSQL (OSS)](https://docs.adiom.io/getting-started/quickstart/dynamo-cosmos) · [Cosmos NoSQL → MongoDB (OSS)](https://docs.adiom.io/getting-started/quickstart/from-cosmos-db-nosql-to-mongodb-api) · [DynamoDB → Cosmos NoSQL (Enterprise)](https://docs.adiom.io/enterprise/running-dsynct/dynamodb-to-cosmos-db-nosql) · [Cosmos NoSQL → MongoDB (Enterprise)](https://docs.adiom.io/enterprise/running-dsynct/cosmos-db-nosql-to-mongo)
+
+### Connector Sidecar
+
+- Java connector; requires JDK 21+ (use the published image as-is). Uses **dynamic ports** for Cosmos SDK connections.
+- Must run on a **user-defined docker network** so dsync/dsynct can reach it by container name.
+- Launch form: `markadiom/cosmosnosqlconnector <PORT> $COSMOS_URI $COSMOS_KEY` (port `8089` by convention).
+- `$COSMOS_URI` is the account URL (`https://<account>.documents.azure.com:443/`); `$COSMOS_KEY` is the Read-Write / Primary Key from Azure Portal → Keys.
+
+```bash
+# Create the shared network once
+docker network create mynet
+
+# Connector — open source (telemetry disabled)
+docker run -d --network mynet --name cosmosnosqlconnector \
+  -e OTEL_SDK_DISABLED=true \
+  markadiom/cosmosnosqlconnector 8089 "$COSMOS_URI" "$COSMOS_KEY"
+
+# Connector — enterprise (telemetry to SigNoz)
+docker run -d --network mynet --name cosmosnosqlconnector \
+  -e OTEL_EXPORTER_OTLP_ENDPOINT=$SIGNOZ \
+  markadiom/cosmosnosqlconnector 8089 "$COSMOS_URI" "$COSMOS_KEY"
+```
+
+### Namespace Syntax
+
+The `--namespace` format differs by direction:
+
+| Direction | Format | Example |
+|-----------|--------|---------|
+| DynamoDB → Cosmos | `TABLE:DB.CONTAINER` | `--namespace "users:appdb.users"` |
+| Cosmos → MongoDB | `DB.CONTAINER` | `--namespace "appdb.users"` |
+| Cosmos → MongoDB (Enterprise worker) | `--namespace-mapping "cosmos_db.container:mongo_db.collection"` | |
+
+### OSS: DynamoDB → Cosmos DB NoSQL
+
+Prerequisites: DynamoDB Streams enabled (at least **New image**); Cosmos DB account with destination database + container pre-created; AWS credentials.
+
+```bash
+docker network create mynet
+
+docker run -d --network mynet --name cosmosnosqlconnector \
+  -e OTEL_SDK_DISABLED=true \
+  markadiom/cosmosnosqlconnector 8089 "$COSMOS_URI" "$COSMOS_KEY"
+
+docker run --network mynet --name dsync -p 8080:8080 \
+  -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
+  -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
+  -e AWS_REGION=$AWS_REGION \
+  markadiom/dsync --web-host 0.0.0.0 \
+  --namespace "<TABLE>:<DB>.<CONTAINER>" \
+  dynamodb grpc://cosmosnosqlconnector:8089 --insecure
+```
+
+- `--load-level [Low|Medium|High]` — controls Cosmos RU / read capacity consumption.
+- `--parallel-copiers N` — reader thread count for the initial copy.
+- Tip: disabling Cosmos container indexes during migration gives a 100–150% throughput boost; recreate indexes and configure global distribution afterward.
+
+### OSS: Cosmos DB NoSQL → MongoDB
+
+Prerequisites: Cosmos URI + Primary Key; MongoDB destination URI; **"All Versions and Deletes"** change feed mode enabled on the Cosmos container (or set `COSMOS_DISABLE_ALL_VERSIONS_AND_DELETES=true`, which disables delete replication).
+
+Cosmos IDs combine the shard key + `id`; MongoDB uses a single `_id`. Map them with a transformer sidecar (see [Change Feed & ID Mapping](#change-feed--id-mapping)).
+
+```bash
+docker network create mynet
+
+# Source connector
+docker run -d --network mynet --name cosmosnosqlconnector \
+  -e OTEL_SDK_DISABLED=true \
+  markadiom/cosmosnosqlconnector 8089 "$COSMOS_URI" "$COSMOS_KEY"
+
+# Transformer sidecar (for id -> _id mapping)
+docker run -d --network mynet --name dsync-transform \
+  -v "./config.yml:/config.yml" \
+  -e 'DSYNCT_MODE=simple' \
+  markadiom/dsynct --host-port=0.0.0.0:8085 transformer
+
+# Migration
+docker run --network mynet --name dsync -p 8080:8080 \
+  markadiom/dsync --web-host 0.0.0.0 \
+  --namespace "<DB>.<CONTAINER>" \
+  grpc://cosmosnosqlconnector:8089 --insecure \
+  "$MONGODB_URI" \
+  grpc://dsync-transform:8085 --insecure
+```
+
+- Use `--mode InitialSync` for a one-time copy with no change feed.
+- OSS supports CDC for a **single namespace only** — multiple namespaces require separate processes or the Enterprise edition.
+
+### Enterprise: DynamoDB → Cosmos DB NoSQL
+
+Requires Temporal + SigNoz (or compatible OTEL collector). Environment: `SIGNOZ=http://<HOST>:4317`, `TEMPORAL=<HOST>:7233`, AWS credentials, `COSMOS_URI`, `COSMOS_KEY`.
+
+```bash
+docker network create mynet
+
+# Connector
+docker run -d --network mynet --name cosmosnosqlconnector \
+  -e OTEL_EXPORTER_OTLP_ENDPOINT=$SIGNOZ \
+  markadiom/cosmosnosqlconnector 8089 "$COSMOS_URI" "$COSMOS_KEY"
+
+# Worker
+docker run -d --network mynet --name dsyncworker \
+  -e OTEL_EXPORTER_OTLP_ENDPOINT=$SIGNOZ \
+  -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
+  -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
+  -e AWS_REGION=$AWS_REGION \
+  markadiom/dsynct worker \
+  --namespace-mapping "<TABLE>:<DB>.<CONTAINER>" \
+  --concurrent-activities 4 --sync-writer-workers 8 \
+  dynamodb grpc://cosmosnosqlconnector:8089 --insecure \
+  temporal --host-port $TEMPORAL app --otel
+
+# Runner
+docker run --network mynet --name dsyncrunner -p 8080:8080 \
+  -e OTEL_EXPORTER_OTLP_ENDPOINT=$SIGNOZ \
+  markadiom/dsynct run \
+  --namespace "<TABLE>:<DB>.<CONTAINER>" \
+  temporal --host-port $TEMPORAL app --otel --host-port 0.0.0.0:8080
+```
+
+### Enterprise: Cosmos DB NoSQL → MongoDB
+
+Same prerequisites as the OSS Cosmos → MongoDB flow, plus Temporal + SigNoz. ID mapping is done by the worker's embedded transformer (`--transform` + a volume-mounted `transform.yaml`).
+
+```bash
+docker network create mynet
+
+# Connector
+docker run -d --network mynet --name cosmosnosqlconnector \
+  -e OTEL_EXPORTER_OTLP_ENDPOINT=$SIGNOZ \
+  markadiom/cosmosnosqlconnector 8089 "$COSMOS_URI" "$COSMOS_KEY"
+
+# Worker (with id -> _id transformation)
+docker run -d --network mynet --name dsyncworker \
+  -e OTEL_EXPORTER_OTLP_ENDPOINT=$SIGNOZ \
+  -v "./transform.yaml:/transform.yaml" \
+  markadiom/dsynct worker \
+  --namespace-mapping "cosmos_db.container:mongo_db.collection" \
+  --concurrent-activities 4 --sync-writer-workers 8 \
+  --transform grpc://cosmosnosqlconnector:8089 --insecure \
+  "$MONGODB_URI" dsync-transform:///transform.yaml \
+  temporal --host-port $TEMPORAL app --otel
+
+# Runner
+docker run --network mynet --name dsyncrunner -p 8080:8080 \
+  -e OTEL_EXPORTER_OTLP_ENDPOINT=$SIGNOZ \
+  markadiom/dsynct run \
+  --namespace "cosmos_db.container" \
+  temporal --host-port $TEMPORAL app --otel --host-port 0.0.0.0:8080
+```
+
+> Omit `--transform`, the volume mount, and `dsync-transform:///transform.yaml` if no ID / data-type changes are needed.
+
+### Change Feed & ID Mapping
+
+- **Change feed**: the Cosmos container must have **"All Versions and Deletes"** mode enabled (Azure Portal → container settings) for delete events to replicate. If it cannot be enabled, set `COSMOS_DISABLE_ALL_VERSIONS_AND_DELETES=true` on the connector — deletes will not replicate.
+- **ID mapping**: Cosmos `id` (plus shard key) → MongoDB `_id`. Use a transform config — see `templates/cosmos-nosql-id-mapping.yaml`:
+  - Simple case (shard key `/id`): `delete: [id]`, `add: [_id]`, `mapid: id`, `cel: {_id: id}`.
+  - Shard-key prefix (e.g. `/region`): `idlist: true`, `idkeys: [region, id]`, `mapid: id[1]`, `cel: {_id: id[1]}`.
+- **Data types**: Cosmos uses JSON, MongoDB uses BSON. Consider converting timestamp strings to Dates, and carry the internal `_ts` field if you need TTL behavior.
+
+### Limitations
+
+- DynamoDB → Cosmos NoSQL flows are currently **not resumable**; embedded verification checks may not function.
+- OSS supports CDC for a **single namespace only** (multiple namespaces → separate processes or Enterprise).
+- The connector requires JDK 21+ and dynamic ports — keep it on a shared docker network rather than publishing fixed ports.
+
 ## Data Transformations
 
 > **Note**: Transformations config and available CEL functions change frequently. Always check offical docs for the latest:
@@ -413,6 +586,10 @@ docker run -d \
 | Transform errors | Test with Transform Studio first |
 | Special chars in password | URL-encode: `&` → `%26`, `@` → `%40`, etc. |
 | State not persisting | Mount volume: `-v $(pwd)/state:/data` with `--save-file /data/resume.state` |
+| Cosmos NoSQL connector unreachable | Run the connector and dsync/dsynct on the same docker network (`--network mynet`); reference it by name (`grpc://cosmosnosqlconnector:8089`) with `--insecure` for plaintext gRPC |
+| Cosmos NoSQL deletes not replicating | Enable "All Versions and Deletes" change feed on the container, or accept loss of deletes with `COSMOS_DISABLE_ALL_VERSIONS_AND_DELETES=true` |
+| Cosmos `id` vs Mongo `_id` mismatch | Add an ID-mapping transform (`templates/cosmos-nosql-id-mapping.yaml`) via a transformer sidecar or worker `--transform` |
+| Slow Cosmos NoSQL writes | Disable container indexes during migration (100–150% boost); recreate them afterward |
 
 ## Resources
 

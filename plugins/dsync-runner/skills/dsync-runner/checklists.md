@@ -21,6 +21,7 @@
 - [ ] Correct dsync image pulled (`markadiom/dsync` or `markadiom/dsynct`)
 - [ ] Sufficient CPU/memory for workload
 - [ ] Persistent volume for resume state (enterprise)
+- [ ] Resumability confirmed for the connector pair (note: DynamoDB → Cosmos NoSQL is not resumable)
 
 ## Distribution Selection Checklist
 
@@ -46,6 +47,34 @@
 - [ ] Load level appropriate for infrastructure
 - [ ] Rate limiting set (if destination has limits)
 - [ ] Transform config tested (if using transformations)
+
+## Cosmos DB NoSQL Checklist
+
+> Cosmos DB NoSQL is reached through the `markadiom/cosmosnosqlconnector` gRPC
+> sidecar, not a connection string.
+
+### Connector
+- [ ] `markadiom/cosmosnosqlconnector` image pulled
+- [ ] Shared docker network created (`docker network create mynet`)
+- [ ] Connector running on the network, port 8089
+- [ ] Cosmos account URI and Primary/Read-Write Key set (`$COSMOS_URI`, `$COSMOS_KEY`)
+- [ ] dsync/dsynct addresses it as `grpc://cosmosnosqlconnector:8089 --insecure`
+- [ ] OTEL configured: `OTEL_SDK_DISABLED=true` (OSS) or `OTEL_EXPORTER_OTLP_ENDPOINT` (Enterprise)
+
+### Cosmos as Source (Cosmos → MongoDB)
+- [ ] "All Versions and Deletes" change feed enabled on the container
+      (or `COSMOS_DISABLE_ALL_VERSIONS_AND_DELETES=true` accepted — deletes won't replicate)
+- [ ] ID-mapping transform prepared and tested (`templates/cosmos-nosql-id-mapping.yaml`)
+- [ ] Correct shard-key case chosen (`/id` vs prefixed shard key)
+- [ ] Single namespace only (OSS) — Enterprise required for multiple namespaces
+- [ ] Namespace format: `DB.CONTAINER` (worker uses `--namespace-mapping`)
+
+### Cosmos as Destination (DynamoDB → Cosmos)
+- [ ] Destination database and container pre-created in Cosmos
+- [ ] DynamoDB Streams enabled with at least "New image"
+- [ ] Container indexes disabled for the migration window (recreate afterward)
+- [ ] Namespace format: `TABLE:DB.CONTAINER`
+- [ ] Aware that DynamoDB → Cosmos NoSQL flows are **not resumable**
 
 ## Initial Sync Validation
 

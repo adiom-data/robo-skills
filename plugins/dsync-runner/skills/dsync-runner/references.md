@@ -19,9 +19,25 @@ mongodb://account:primaryKey@account.mongo.cosmos.azure.com:10255/?ssl=true&repl
 ```
 
 ### Azure Cosmos DB (NoSQL API)
+
+Not a URI connector. Cosmos DB NoSQL runs as a separate gRPC sidecar
+(`markadiom/cosmosnosqlconnector`) that dsync/dsynct reaches by container name on a
+shared docker network.
+
+```bash
+# Launch the connector sidecar (port 8089)
+docker run -d --network mynet --name cosmosnosqlconnector \
+  -e OTEL_SDK_DISABLED=true \
+  markadiom/cosmosnosqlconnector 8089 "$COSMOS_URI" "$COSMOS_KEY"
 ```
-cosmosnosql://account.documents.azure.com?accountKey=primaryKey&database=dbname
+
 ```
+# Connector address used as a dsync/dsynct source or destination
+grpc://cosmosnosqlconnector:8089 --insecure
+```
+
+`$COSMOS_URI` = `https://<account>.documents.azure.com:443/`, `$COSMOS_KEY` = Primary Key.
+See the "Cosmos DB NoSQL" command examples below.
 
 ### AWS DynamoDB
 ```
@@ -152,6 +168,47 @@ docker run --rm markadiom/dsync \
 docker run --rm markadiom/dsync \
   /dev/fakesource \
   "mongodb://dest:27017"
+```
+
+### Cosmos DB NoSQL: DynamoDB → Cosmos (Open Source)
+```bash
+docker network create mynet
+
+docker run -d --network mynet --name cosmosnosqlconnector \
+  -e OTEL_SDK_DISABLED=true \
+  markadiom/cosmosnosqlconnector 8089 "$COSMOS_URI" "$COSMOS_KEY"
+
+docker run --network mynet --name dsync -p 8080:8080 \
+  -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
+  -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
+  -e AWS_REGION=$AWS_REGION \
+  markadiom/dsync --web-host 0.0.0.0 \
+  --namespace "users:appdb.users" \
+  dynamodb grpc://cosmosnosqlconnector:8089 --insecure
+```
+
+### Cosmos DB NoSQL: Cosmos → MongoDB (Open Source)
+```bash
+docker network create mynet
+
+# Source connector
+docker run -d --network mynet --name cosmosnosqlconnector \
+  -e OTEL_SDK_DISABLED=true \
+  markadiom/cosmosnosqlconnector 8089 "$COSMOS_URI" "$COSMOS_KEY"
+
+# Transformer sidecar (id -> _id mapping)
+docker run -d --network mynet --name dsync-transform \
+  -v "./config.yml:/config.yml" \
+  -e 'DSYNCT_MODE=simple' \
+  markadiom/dsynct --host-port=0.0.0.0:8085 transformer
+
+# Migration
+docker run --network mynet --name dsync -p 8080:8080 \
+  markadiom/dsync --web-host 0.0.0.0 \
+  --namespace "appdb.users" \
+  grpc://cosmosnosqlconnector:8089 --insecure \
+  "$MONGODB_URI" \
+  grpc://dsync-transform:8085 --insecure
 ```
 
 ## Enterprise Worker Configuration
@@ -323,3 +380,6 @@ docker run --rm \
 | `document exceeds max size` | >16MB document | Split large documents or increase limit |
 | `change stream not supported` | Cosmos DB limitation | Use `--cosmos-deletes-cdc` flag |
 | `rate limit exceeded` | Too many requests | Reduce `--load-level` or add `--write-rate-limit` |
+| `connection refused` to connector | Cosmos NoSQL connector not on shared network | Run connector + dsync/dsynct on `--network mynet`; address it as `grpc://cosmosnosqlconnector:8089 --insecure` |
+| Cosmos NoSQL deletes missing | "All Versions and Deletes" change feed disabled | Enable it on the container, or set `COSMOS_DISABLE_ALL_VERSIONS_AND_DELETES=true` (deletes won't replicate) |
+| `_id` missing / duplicate after Cosmos sync | Cosmos `id` not mapped to Mongo `_id` | Apply an ID-mapping transform (see `templates/cosmos-nosql-id-mapping.yaml`) |

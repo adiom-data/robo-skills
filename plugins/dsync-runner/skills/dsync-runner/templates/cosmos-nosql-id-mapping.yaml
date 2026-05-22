@@ -1,0 +1,66 @@
+# Cosmos DB NoSQL -> MongoDB ID-Mapping Transform
+#
+# Why this is needed:
+#   Cosmos DB NoSQL identifies a document by its `id` field PLUS its shard
+#   (partition) key. MongoDB identifies a document by a single `_id` field.
+#   When migrating Cosmos -> MongoDB you must fold the Cosmos identifier into a
+#   MongoDB `_id`, otherwise documents land without an `_id` or collide.
+#
+# Docs:
+#   https://docs.adiom.io/getting-started/quickstart/from-cosmos-db-nosql-to-mongodb-api
+#   https://docs.adiom.io/enterprise/running-dsynct/cosmos-db-nosql-to-mongo
+#
+# How to apply this config:
+#
+#   Open source (transformer sidecar) -- mount this file as /config.yml:
+#     docker run -d --network mynet --name dsync-transform \
+#       -v "./cosmos-nosql-id-mapping.yaml:/config.yml" \
+#       -e 'DSYNCT_MODE=simple' \
+#       markadiom/dsynct --host-port=0.0.0.0:8085 transformer
+#     # then add `grpc://dsync-transform:8085 --insecure` after $MONGODB_URI
+#
+#   Enterprise (worker --transform) -- mount this file as /transform.yaml:
+#     docker run -d --network mynet --name dsyncworker \
+#       -v "./cosmos-nosql-id-mapping.yaml:/transform.yaml" \
+#       markadiom/dsynct worker --transform ... \
+#       "$MONGODB_URI" dsync-transform:///transform.yaml temporal ...
+#
+# Pick ONE of the two `mappings` blocks below depending on your Cosmos shard key.
+
+# ---------------------------------------------------------------------------
+# Case A -- shard key is `/id` (the Cosmos id IS the whole identifier).
+# Map the `id` field directly onto MongoDB's `_id`.
+# ---------------------------------------------------------------------------
+defaultmapping: default
+mappings:
+  - namespace: default
+    delete: ["id"]      # drop the Cosmos `id` field
+    add: ["_id"]        # introduce MongoDB's `_id`
+    mapid: id           # use `id` as the document identifier
+    cel:
+      _id: id           # _id := id
+
+# ---------------------------------------------------------------------------
+# Case B -- shard key is a separate field (e.g. `/region`).
+# The Cosmos identifier is multi-part: [shardKey, id]. Declare both parts with
+# `idkeys`, then take the `id` part (index 1) as MongoDB's `_id`.
+#
+# To use this case, comment out Case A above and uncomment the block below.
+# ---------------------------------------------------------------------------
+# defaultmapping: default
+# idlist: true
+# mappings:
+#   - namespace: default
+#     idkeys: ["region", "id"]   # multi-part source identifier
+#     delete: ["region", "id"]
+#     add: ["_id"]
+#     mapid: id[1]               # second component = the `id` field
+#     cel:
+#       _id: id[1]
+
+# ---------------------------------------------------------------------------
+# Optional data-type fixes (Cosmos JSON -> MongoDB BSON)
+# ---------------------------------------------------------------------------
+# Cosmos stores JSON; MongoDB stores BSON. Add `cel` entries to a mapping to
+# convert types -- e.g. parse timestamp strings into Dates, or keep the Cosmos
+# internal `_ts` field if you rely on TTL behaviour on the MongoDB side.
