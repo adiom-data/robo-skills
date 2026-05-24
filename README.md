@@ -1,6 +1,6 @@
 # Robo Skills Marketplace
 
-A collection of AI-powered skills (plugins) for Factory Droid.
+A collection of AI-powered skills (plugins) for AI Coding Assistants (Claude, Codex, Droid, etc).
 
 ## Available Plugins
 
@@ -12,7 +12,11 @@ A collection of AI-powered skills (plugins) for Factory Droid.
 
 ## Installation
 
-Copy any plugin folder to your Factory skills directory:
+```
+npx skills add adiom-data/robo-skills
+```
+
+Or, copy any plugin folder to your Factory skills directory:
 
 ```bash
 # Personal skills
