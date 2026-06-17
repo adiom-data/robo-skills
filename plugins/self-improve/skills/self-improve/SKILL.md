@@ -72,10 +72,24 @@ Why this change improves the skill.
 
 ### Step 4: Create PRs
 
-DO NOT create a PR yourself. Use another droid to do that. For each update file created, execute:
+**DO NOT create a PR yourself.** Spawn a separate headless agent to do it — one per update file. Use the command for the runtime you are currently executing in. The prompt string is identical across runtimes; only the launcher differs.
+
+#### Droid (Factory.AI)
 ```bash
 droid exec --auto high "Use the file /tmp/skill-updates/<skill-name>-update.md to create a PR in git@github.com:adiom-data/robo-skills.git to create or update skill(s)"
 ```
+
+#### Claude (Claude Code)
+```bash
+claude -p "Use the file /tmp/skill-updates/<skill-name>-update.md to create a PR in git@github.com:adiom-data/robo-skills.git to create or update skill(s)" --dangerously-skip-permissions
+```
+
+#### Codex (OpenAI Codex CLI)
+```bash
+codex exec --dangerously-bypass-approvals-and-sandbox "Use the file /tmp/skill-updates/<skill-name>-update.md to create a PR in git@github.com:adiom-data/robo-skills.git to create or update skill(s)"
+```
+
+> Codex uses full bypass (`--yolo` alias) rather than `--full-auto` because creating the PR needs network access (git push / `gh`), which `--full-auto`'s `workspace-write` sandbox blocks.
 
 ## Example Session
 
@@ -107,10 +121,7 @@ Add MongoDB Atlas SRV connection string format and password encoding notes.
 Atlas SRV format is commonly used and password encoding is a frequent gotcha.
 ```
 
-2. Execute:
-```bash
-droid exec --auto high "Use the file /tmp/skill-updates/dsync-runner-update.md to create a PR in git@github.com:adiom-data/robo-skills.git to create or update skill(s)"
-```
+2. Run the Step 4 command for your runtime (Droid / Claude / Codex) against `/tmp/skill-updates/dsync-runner-update.md`.
 
 ## Guidelines
 
