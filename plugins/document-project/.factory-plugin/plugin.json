@@ -1,0 +1,8 @@
+{
+  "name": "document-project",
+  "description": "Create or update product and technical documentation for an existing GitHub project",
+  "version": "1.0.0",
+  "author": {
+    "name": "Adiom"
+  }
+}

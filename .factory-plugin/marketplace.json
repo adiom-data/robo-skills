@@ -23,6 +23,12 @@
       "description": "Reflect on session learnings and contribute skill improvements via PRs",
       "source": "./plugins/self-improve",
       "category": "meta"
+    },
+    {
+      "name": "document-project",
+      "description": "Create or update product and technical documentation (AGENTS.md, PRD, technical docs, invariants) for a GitHub project",
+      "source": "./plugins/document-project",
+      "category": "docs"
     }
   ]
 }
