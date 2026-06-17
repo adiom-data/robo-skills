@@ -112,7 +112,7 @@ existing PRD. Note explicitly what product information is *absent* — you'll ma
   and links into AGENTS.md, PRD.md, and docs/. Drop stale framing.
 - **docs/** topic files → use tables for component/env/entity references; centralize the env-var
   reference in integrations.md (other docs link to it) so a new var has one home.
-- **data-flows.md** → document each major data path as its own subsection, ordered from entry to
+- **docs/data-flows.md** → document each major data path as its own subsection, ordered from entry to
   exit. For each flow: an ASCII diagram of the hops (`source → component → store → …`), a numbered
   step list naming the exact function/component at each hop, what data is read/written at each store,
   the transformations applied, and the identifier that threads the flow. Call out sync vs async
