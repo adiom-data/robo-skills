@@ -211,11 +211,24 @@ range from minimal (just `bazel build //deploy:publish_manifest` → `bazel run
 first). Prefer the **gated** shape so a broken test blocks a release. Key points:
 
 - **Publish targets are framework-standard:** verify with
-  `//deploy:publish_manifest`, publish with `//deploy:publish_all`. Inspect
-  `deploy/BUILD.bazel`: if the `publish_bundle_set` bakes `push_prefix` / tags /
-  `source` (and stamps via `tools/status.sh`), `bazel run //deploy:publish_all`
-  needs **no flags**; if not, pass `--push-prefix/--tag/--source/--revision` like
-  the minimal examples do.
+  `//deploy:publish_manifest`, publish with `//deploy:publish_all`.
+- **Stamping is two-sided — get both right (this bites):**
+  - Enable `build --stamp` in `.bazelrc` (alongside the existing
+    `--workspace_status_command=./tools/status.sh`). The deploy **bundles** expand
+    `{STABLE_REFERENCE_PREFIX}` into the image-ref prefix at **build time**, and
+    that expansion is a no-op unless the stable-status file is non-empty, which
+    only happens with `--stamp`. Without it the bundles ship a literal
+    `{STABLE_REFERENCE_PREFIX}/...` image ref. (A bare `--workspace_status_command`
+    with no `--stamp` is the tell that it was forgotten.)
+  - **Do NOT bake `{STABLE_GIT_COMMIT}` into `push_tags`.** The flux rule appends
+    that **tag** expansion to the *runtime* publish script, but doesn't put the
+    stable-status file in the `bazel run` runfiles — so under `bazel run` the token
+    can't resolve and you push an image literally tagged `{STABLE_GIT_COMMIT}`
+    (GHCR 404s). Set `push_tags = ["latest"]` and pass the per-commit tag at
+    publish time: `bazel run //deploy:publish_all -- --tag "sha-${GITHUB_SHA::12}"
+    --tag latest --revision "${GITHUB_SHA}"`. Runtime `--tag`s override the baked
+    `push_tags`; `--push-prefix/--source/--compare-tag` can be passed too if not
+    baked. Confirm the run log shows real tags (`...:sha-… ` + `...:latest`).
 - **Host Go is only needed for the non-Bazel gate** (`go test`/`go vet`). The
   Bazel build itself uses the hermetic `rules_go` SDK, so a pure build+publish
   workflow needs no `setup-go`.
@@ -287,7 +300,12 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - run: bazelisk build //...
       - run: bazelisk build //deploy:publish_manifest
-      - run: bazelisk run //deploy:publish_all   # add --push-prefix/--tag/... only if not baked
+      - name: Publish production bundles        # per-commit tag passed at runtime (see notes)
+        run: |
+          bazelisk run //deploy:publish_all -- \
+            --tag "sha-${GITHUB_SHA::12}" \
+            --tag latest \
+            --revision "${GITHUB_SHA}"
 ```
 
 ## Gotchas (learned the hard way — check these)
@@ -316,8 +334,11 @@ jobs:
   not the similarly-named AI agent that may shadow `goose` on PATH.
 - **Publish workflow** (Phase 9): the CI gate is unit-only (`go test ./...` skips
   the DB suite); integration tests stay manual. Log into GHCR **before** the Bazel
-  build if base images are private; `bazel run //deploy:publish_all` takes no flags
-  only if `deploy/BUILD.bazel` bakes the prefix/tags/source.
+  build if base images are private.
+- **Bazel stamping for publish:** need `build --stamp` so deploy bundles expand
+  `{STABLE_REFERENCE_PREFIX}` at build time — BUT don't bake `{STABLE_GIT_COMMIT}`
+  into `push_tags` (it won't expand under `bazel run`); pass `--tag sha-<short>
+  --tag latest` at publish time instead, and verify the run log shows real tags.
 
 ## Verification gate (run before declaring done)
 - `go build ./...` && `go vet ./...`
