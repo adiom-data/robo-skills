@@ -162,10 +162,38 @@ audit service depends on (identity) can also audit without an import cycle.
   `bazel mod tidy` to sync MODULE.bazel `use_repo`.
 - Update the app Deployment env + the auth secret keys to the new auth model.
 
-## Phase 5 — Seed demo data
-Port the source's seed (idempotent: only when the DB is empty) so the app isn't
-blank — users (bcrypt) and data. Verify
-the application dashboard/lists are populated.
+## Phase 5 — Seed demo data (and harden ALL startup-time DB work)
+Port the source's seed so the app isn't blank — users (bcrypt) and demo data.
+
+**Critical porting hazard — deploy-ordering tolerance.** The source app was almost
+certainly a single process started *after* its DB, so seed-on-startup (and any
+migrate-on-boot, cache warmup, etc.) "just works" locally and synchronously. The
+target runs under Kubernetes with **multiple replicas**, a **separate migration
+Job**, a DB provisioned by another step, and **no guaranteed start order** — so the
+same startup code breaks: the app boots before the DB/schema exist. Audit every
+startup-time side effect that touches the DB and make it tolerant:
+
+- **Wait-for-ready, don't fail-once.** Ping the DB with capped backoff until
+  reachable, then proceed. The anti-pattern (which *will* bite): try once, log a
+  WARN on failure, and continue serving in a broken state (app "up" but unusable —
+  e.g. every login 401s because users never got seeded). Never silently half-succeed.
+- **Run it in the background**, not blocking startup — readiness must not depend on
+  Postgres (the framework's own guidance), and the server should come up and self-heal.
+- **Idempotent + atomic.** Wrap the seed in a single transaction so a partial/crashed
+  run rolls back and the next attempt re-seeds cleanly — not just "skip if a row
+  exists" (that leaves partial state stuck). Reference data → fold into migrations;
+  demo data → env-gated, idempotent.
+- **Single-runner across replicas.** Guard with a Postgres transaction advisory lock
+  (`pg_advisory_xact_lock`) so concurrent replicas don't race (no unique-violation
+  noise, no double seed). One seeds; the others no-op.
+- Don't reach for platform ordering (Flux `dependsOn`/`wait`) as the fix — it may not
+  be the platform's convention, often lives in a tenant-env source you don't control,
+  and gets pruned. App-tolerance is the durable, convention-aligned fix.
+
+Verify the dashboard/lists populate, then **prove the ordering**: start the app
+against a not-yet-existing DB → it must serve and retry (not crash); create the
+DB+schema → it auto-seeds with no restart; re-run → no duplicates; two instances on a
+fresh DB → exactly one seeds.
 
 ## Phase 6 — Fidelity audit (do this; it WILL find regressions)
 Run two read-only audits comparing the source's documented intent against your
@@ -339,6 +367,13 @@ jobs:
   `{STABLE_REFERENCE_PREFIX}` at build time — BUT don't bake `{STABLE_GIT_COMMIT}`
   into `push_tags` (it won't expand under `bazel run`); pass `--tag sha-<short>
   --tag latest` at publish time instead, and verify the run log shows real tags.
+- **Startup-time DB work assumes order that K8s doesn't give** (Phase 5): seed /
+  migrate-on-boot / warmup that works in the single-process source breaks under
+  multi-replica + separate migration Job + arbitrary start order. Make it wait-for-
+  ready (bounded backoff, background, never fail-once-and-continue), idempotent +
+  atomic (one tx), and single-runner (`pg_advisory_xact_lock`). Symptom to catch:
+  app "Running"/Ready but every request fails because a one-shot startup step
+  silently lost the boot race.
 
 ## Verification gate (run before declaring done)
 - `go build ./...` && `go vet ./...`
