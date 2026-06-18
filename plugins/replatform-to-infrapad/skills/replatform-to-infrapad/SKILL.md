@@ -50,7 +50,44 @@ Then read the framework's `tokenissuer`/`httpapp` source from the Go module cach
 to confirm the exact `Issuer.Mint`, `JWKSHandler`, `BearerAuthenticator`, and
 `httpapp.ConnectHandler`/`ConnectOption` signatures before writing code.
 
+## Phase 0.5 — Rename the scaffold to the project name
+The fresh scaffold still carries the framework's example identity
+(`sample-app`/`sample_app`, the `sample-api`/`sample-postgres` k8s names, the
+`sample-app-auth` secret, the `sample-app-{api,gateway,migrate}` images, and a
+leftover example `SampleService`). Rename all of it to the project's name/slug.
+Do this **early** (right after Phase 0) so every new file you write already uses
+the project's module path — renaming later forces a regen + rebuild of everything.
+Confirm the target slug with the user (it drives the Go module path and all k8s
+resource names, which are hard to reverse).
+
+1. **Delete the leftover example service** first (its proto + generated Go/TS +
+   BUILD files) so it isn't dragged through the rename or regenerated.
+2. **Scripted, ordered replace** across tracked text files (exclude `.git`,
+   `node_modules`, `web/src/gen`, and the `bazel-*` symlinks). Apply
+   **most-specific first** to avoid double-mangling:
+   - the full module path `github.com/<org>/sample-app` → `github.com/<org>/<project>`
+   - the compound image names `sample-app-{api,gateway,migrate}` → `<project>-{api,gateway,migrate}`
+   - the auth secret `sample-app-auth` → `<project>-auth`
+   - the bare `sample-app` / `sample_app` (Bazel module name, prose, gazelle prefix) → `<project>`
+   - `sample-postgres` → `<project>-postgres` (covers its `-app`/`-superuser`/`-rw` generated-secret suffixes)
+   - `sample-api` → `<project>-api` (k8s Service/Deployment, gateway backend url,
+     `AUTH_ISSUER`, `OTEL_SERVICE_NAME`)
+   Also fix the `bazel-sample-app` entry in `.bazelignore`.
+3. **Regenerate, don't hand-edit, the generated trees:** `buf generate` (the proto
+   `option go_package` now points at the new module) rewrites `gen/**`; then
+   `bazel run //:gazelle` rewrites BUILD importpaths/deps; then `bazel mod tidy`
+   syncs the renamed Bazel module.
+4. **Verify cross-references stay consistent:** the gateway backend host, the
+   gateway `auth.issuer`, the API `AUTH_ISSUER`, and the K8s Service name must all
+   be the same `<project>-api`; the CNPG cluster name must match the
+   `<project>-postgres-*` secret names referenced by the app + migration jobs.
+5. Grep for any residual `sample-app`/`sample_app`/`sample-api`/`sample-postgres`/
+   `SampleService` and confirm `go build ./...`, `buf generate`, web `tsc`/build,
+   and `bazel build` are all green before continuing.
+
 ## Decision points (ask the user with AskUserQuestion)
+0. **Project name/slug** — drives the Go module path and every k8s/image name (see
+   Phase 0.5). Confirm before renaming; it's destructive to change later.
 1. **Auth model.** The framework assumes external OIDC. If the source has its own
    email/password login, the usual choice is **port password auth into the
    framework's issuer**: add an `auth.v1.AuthService/Login` that verifies bcrypt
@@ -162,6 +199,97 @@ stack-specific ones (architecture, data-model, data-flows, workflows, operations
 integrations, testing, invariants) for the Go/Connect/Bazel stack. Add AGENTS.md +
 a CLAUDE.md pointer. Keep `docs/replatform-gaps.md` current.
 
+## Phase 9 — GitHub publish workflow (CI)
+Add `.github/workflows/publish.yml` that, on push to `main` (+ `workflow_dispatch`),
+runs a **lightweight unit/CI gate** then builds and publishes the Flux/OCI bundles.
+**Integration tests (DB + running API) do NOT run in CI** — they need a database;
+keep them manual and document the command in `README.md` (Phase 7).
+
+Match an existing adiom-data publish workflow in the org for house style; they
+range from minimal (just `bazel build //deploy:publish_manifest` → `bazel run
+//deploy:publish_all`) to gated (typecheck + unit tests + `bazel build //...`
+first). Prefer the **gated** shape so a broken test blocks a release. Key points:
+
+- **Publish targets are framework-standard:** verify with
+  `//deploy:publish_manifest`, publish with `//deploy:publish_all`. Inspect
+  `deploy/BUILD.bazel`: if the `publish_bundle_set` bakes `push_prefix` / tags /
+  `source` (and stamps via `tools/status.sh`), `bazel run //deploy:publish_all`
+  needs **no flags**; if not, pass `--push-prefix/--tag/--source/--revision` like
+  the minimal examples do.
+- **Host Go is only needed for the non-Bazel gate** (`go test`/`go vet`). The
+  Bazel build itself uses the hermetic `rules_go` SDK, so a pure build+publish
+  workflow needs no `setup-go`.
+- **The integration suite self-skips without `TEST_DATABASE_URL`**, so plain
+  `go test ./...` in CI runs only fast unit tests — exactly the lightweight gate.
+- **`vite build` (the web image) does not typecheck** — add an explicit
+  `tsc --noEmit` step. Use the repo's actual package manager (pnpm vs npm) and
+  pin Node via `.nvmrc`.
+- **Log in to GHCR _before_ the build** when image targets pull private base
+  images (e.g. `ghcr.io/<org>/components/*`): `rules_oci` reads the docker config
+  that `docker/login-action` writes. If the bases are public, login-before-publish
+  is fine.
+- Use `bazel-contrib/setup-bazel` (cached) over the older `setup-bazelisk` (no
+  cache) for faster CI.
+
+Example (gated; adjust package manager / target flags to the repo):
+
+```yaml
+name: Publish
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # --- lightweight unit/CI gate (no DB, no running services) ---
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Go build, vet, unit tests   # integration suite self-skips without TEST_DATABASE_URL
+        run: go build ./... && go vet ./... && go test ./...
+
+      - uses: pnpm/action-setup@v4        # omit this step if the repo uses npm
+        with:
+          version: "<pnpm-version>"
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Web typecheck               # vite build does NOT typecheck
+        run: pnpm install --frozen-lockfile && pnpm -C web exec tsc --noEmit
+
+      # --- build + publish ---
+      - uses: bazel-contrib/setup-bazel@0.15.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+      - name: Log in to GHCR              # before the build: private base-image pulls
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - run: bazelisk build //...
+      - run: bazelisk build //deploy:publish_manifest
+      - run: bazelisk run //deploy:publish_all   # add --push-prefix/--tag/... only if not baked
+```
+
 ## Gotchas (learned the hard way — check these)
 - **Postgres `uuid = text`** has no operator. Optional filters like
   `($n = '' or col = $n)` force `$n` to text and break uuid comparisons — cast the
@@ -178,9 +306,18 @@ a CLAUDE.md pointer. Keep `docs/replatform-gaps.md` current.
 - **pnpm + TS:** set `skipLibCheck: true` (pnpm's isolated node_modules trips
   library `.d.ts` react-type resolution); drop deprecated `baseUrl` (use `paths`).
 - **Connect-ES method casing** preserves acronyms: `ListQCLogs` → `listQCLogs`.
+- **Renaming the scaffold** (Phase 0.5): replace most-specific-first (full module
+  path before bare `sample-app`); never hand-edit `gen/**` — `buf generate` +
+  `bazel run //:gazelle` regenerate it; run `bazel mod tidy` after the Bazel module
+  name changes; keep gateway-host / `AUTH_ISSUER` / Service name / CNPG-secret names
+  mutually consistent.
 - **Env:** `pnpm` often isn't on a non-interactive PATH (`npm i -g pnpm@<ver>`);
   the migration tool is **pressly/goose** (`go install github.com/pressly/goose/v3/cmd/goose@latest`),
   not the similarly-named AI agent that may shadow `goose` on PATH.
+- **Publish workflow** (Phase 9): the CI gate is unit-only (`go test ./...` skips
+  the DB suite); integration tests stay manual. Log into GHCR **before** the Bazel
+  build if base images are private; `bazel run //deploy:publish_all` takes no flags
+  only if `deploy/BUILD.bazel` bakes the prefix/tags/source.
 
 ## Verification gate (run before declaring done)
 - `go build ./...` && `go vet ./...`
