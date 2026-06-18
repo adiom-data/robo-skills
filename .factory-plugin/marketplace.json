@@ -29,6 +29,12 @@
       "description": "Create or update product and technical documentation (AGENTS.md, PRD, technical docs, invariants) for a GitHub project",
       "source": "./plugins/document-project",
       "category": "docs"
+    },
+    {
+      "name": "replatform-to-infrapad",
+      "description": "Replatform an existing application onto the Infrapad framework (Go + Connect-RPC + buf + Bazel + Goose + gateway, Vite/React SPA)",
+      "source": "./plugins/replatform-to-infrapad",
+      "category": "migration"
     }
   ]
 }

@@ -10,6 +10,7 @@ A collection of AI-powered skills (plugins) for AI Coding Assistants (Claude, Co
 | [dsync-sqlbatch-mapping](plugins/dsync-sqlbatch-mapping) | Generate SQLBatch dsync YAML configuration for SQL to NoSQL data sync |
 | [self-improve](plugins/self-improve) | Reflect on session learnings and contribute skill improvements via PRs |
 | [document-project](plugins/document-project) | Create or update product & technical documentation (AGENTS.md, PRD, docs, invariants) for a GitHub project |
+| [replatform-to-infrapad](plugins/replatform-to-infrapad) | Replatform an existing app onto the Infrapad framework (Go + Connect-RPC + buf + Bazel + Goose + gateway, Vite/React SPA) |
 
 ## Installation
 

@@ -1,0 +1,8 @@
+{
+  "name": "replatform-to-infrapad",
+  "description": "Replatform an existing application onto the Infrapad framework (Go + Connect-RPC + buf + Bazel + Goose + gateway, Vite/React SPA)",
+  "version": "1.0.0",
+  "author": {
+    "name": "Adiom"
+  }
+}
